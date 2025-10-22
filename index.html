@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Station Equipment Status</title>
+  <script src="https://cdn.jsdelivr.net/npm/luxon@3/build/global/luxon.min.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+    }
+
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      font-size: 14px;
+    }
+
+    th, td {
+      border: 1px solid #ccc;
+      padding: 4px;
+      text-align: center;
+    }
+
+  .cell {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    margin-right: 3px;
+  }
+  
+  .cell.circle {
+    border-radius: 50%;
+  }
+  
+  .cell.square {
+    border-radius: 0;
+  }
+  
+  .cell.good {
+    background-color: #0072B2; /* blue */
+  }
+  
+  .cell.zero {
+    background-color: #F0E442; /* yellow */
+  }
+  
+  .cell.missing {
+    background-color: #E69F00; /* orange */
+  }
+  
+  .cell.offline {
+    background-color: purple;
+  }
+  </style>
+</head>
+<body>
+  <h2>Station Equipment Status Table</h2>
+
+  <div style="margin-bottom: 10px;">
+    <b>Legend:</b><br>
+    🔵 <span style="color: #0072B2;">Blue circle</span> = Good<br>
+    🟡 <span style="color: #F0E442;">Yellow circle</span> = Zero value<br>
+    🟧 <span style="color: #E69F00;">Orange square</span> = Expected but not reporting<br>
+    🟪 <span style="color: purple;">Purple square</span> = Intentionally offline
+  </div>
+  
+  <div id="table-container">Loading...</div>
+
+  <script>
+  const stationOrder = [
+	"Beaverlodge", "Dunes", "Fox Creek", "Grande Prairie - Henry Pirker", "Happy Valley",  "Milner", "Smoky Heights", "Valleyview"
+  ];
+  
+  const parameterOrder = [
+    "Sulphur Dioxide", "Hydrogen Sulphide", "Total Reduced Sulphur", "Total Oxides of Nitrogen", "Nitrogen Dioxide",
+    "Nitric Oxide", "Fine Particulate Matter", "Ozone", "Carbon Monoxide", "Total Hydrocarbons", "Methane", "Non-methane Hydrocarbons",
+    "Wind Speed", "Wind Direction", "Outdoor Temperature", "Relative Humidity"
+  ];
+  
+  const parameterShortNames = {
+    "Sulphur Dioxide": "SO₂", "Hydrogen Sulphide": "H₂S", "Total Reduced Sulphur": "TRS",
+    "Total Oxides of Nitrogen": "NOₓ", "Nitrogen Dioxide": "NO₂", "Nitric Oxide": "NO",
+    "Fine Particulate Matter": "PM2.5", "Ozone": "O₃", "Carbon Monoxide": "CO",
+    "Total Hydrocarbons": "THC", "Methane": "CH₄", "Non-methane Hydrocarbons": "NMHC",
+    "Wind Speed": "WS", "Wind Direction": "WD", "Outdoor Temperature": "Temp", "Relative Humidity": "RH"
+  };
+    
+  const edmontonZone = luxon.IANAZone.create("America/Edmonton");
+
+  async function loadCSV(url) {
+    const res = await fetch(url);
+    const text = await res.text();
+    const cleaned = text.replace(/^\uFEFF/, "");
+    const [headerLine, ...lines] = cleaned.trim().split('\n');
+    const headers = headerLine.split(',').map(h => h.trim());
+    return lines.map(line => {
+      const row = line.split(',').map(v => v.trim());
+      return Object.fromEntries(row.map((val, i) => [headers[i], val]));
+    });
+  }
+
+function formatEdmontonTime(utcString) {
+  const dt = luxon.DateTime.fromISO(utcString, { zone: 'utc' }).setZone(edmontonZone);
+  return dt.toFormat("yyyy-MM-dd HH:mm");
+}
+
+async function buildTable() {
+  const now = new Date();
+  const cutoffHours = 2; // consider "offline" if last seen > 2 hours ago
+  
+  const equipment = await loadCSV("https://raw.githubusercontent.com/DKevinM/AB_datapull/main/data/equipment.csv");
+  const broken = await loadCSV("https://raw.githubusercontent.com/DKevinM/AB_datapull/main/data/station_parameters.csv");
+  const latest = await loadCSV("https://raw.githubusercontent.com/DKevinM/AB_datapull/main/data/last6h.csv");
+
+  const brokenKeys = new Set(broken.map(b => `${b.StationName}__${b.ParameterName}`));
+  const expectedEquipment = new Set(equipment.map(e => `${e.StationName}__${e.ParameterName}`));
+  const latestTimes = {};
+  const live = {};
+
+// Sort latest by timestamp (newest first)
+latest.sort((a, b) => new Date(b.ReadingDate) - new Date(a.ReadingDate));
+  
+latest.forEach(d => {
+  const station = d.StationName;
+  const param = d.ParameterName;
+  const dt = new Date(d.ReadingDate);
+
+  let v = parseFloat(d.Value);
+  if (["Ozone", "Total Oxides of Nitrogen", "Hydrogen Sulphide", "Total Reduced Sulphur", "Sulphur Dioxide", "Nitric Oxide", "Nitrogen Dioxide"].includes(param)) {
+    v *= 1000;
+  }
+  if (isNaN(v) || d.Value === "-888") return;
+
+  const key = `${station}__${param}`;
+
+  // ✅ Only use the most recent value per station+param
+  if (!live[key]) {
+    live[key] = { value: v, time: dt };
+  }
+
+  if (!latestTimes[station] || dt > latestTimes[station]) {
+    latestTimes[station] = dt;
+  }
+});
+
+  let html = `<table><thead><tr><th>Station</th><th>Last Seen (MT)</th>`;
+  parameterOrder.forEach(param => {
+    const shortLabel = parameterShortNames[param] || param;
+    html += `<th>${shortLabel}</th>`;
+  });
+  html += `</tr></thead><tbody>`;
+
+  stationOrder.forEach(station => {
+    const lastSeen = latestTimes[station];
+    const ageHours = lastSeen ? (now - lastSeen) / (1000 * 60 * 60) : null;
+    const offlineFlag = ageHours !== null && ageHours > cutoffHours;
+    
+    let lastSeenCell = "-";
+    if (lastSeen) {
+      lastSeenCell = formatEdmontonTime(lastSeen.toISOString());
+      if (offlineFlag) lastSeenCell += " ⚠️";
+    }
+    
+    html += `<tr><td>${station}</td><td>${lastSeenCell}</td>`;
+
+
+    parameterOrder.forEach(param => {
+      const key = `${station}__${param}`;
+      const expected = expectedEquipment.has(key);
+
+      if (!expected) {
+        html += `<td></td>`;
+        return;
+      }
+
+      if (brokenKeys.has(key) || offlineFlag) {
+        html += `<td><span class="cell square offline" title="Offline"></span></td>`;
+      } else if (live[key]) {
+        const val = parseFloat(live[key].value).toFixed(1);
+        if (val === "0.0") {
+          html += `<td><span class="cell circle zero" title="Zero"></span><span style="font-size: 10px;">${val}</span></td>`;
+        } else {
+          html += `<td><span class="cell circle good" title="${val}"></span><span style="font-size: 10px;">${val}</span></td>`;
+        }
+      } else {
+        html += `<td><span class="cell square missing" title="Expected but not reporting"></span></td>`;
+      }
+    });
+
+    html += `</tr>`;
+  });
+
+  html += `</tbody></table>`;
+  document.getElementById("table-container").innerHTML = html;
+}
+
+buildTable();
+  </script>
+</body>
+</html>
