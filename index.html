@@ -109,7 +109,7 @@ async function buildTable() {
   const now = new Date();
   const cutoffHours = 2; // consider "offline" if last seen > 2 hours ago
   
-  const equipment = await loadCSV("https://raw.githubusercontent.com/DKevinM/AB_datapull/main/data/equipment.csv");
+  const equipment = await loadCSV("https://raw.githubusercontent.com/DKevinM/AB_datapull/main/data/station_list.csv");
   const broken = await loadCSV("https://raw.githubusercontent.com/DKevinM/AB_datapull/main/data/station_parameters.csv");
   const latest = await loadCSV("https://raw.githubusercontent.com/DKevinM/AB_datapull/main/data/last6h.csv");
 
