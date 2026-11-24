@@ -100,8 +100,11 @@
     });
   }
 
+// Alberta UTC-6 all year from 2026-11-01; old browser tz data still says UTC-7 after that (2026-11-24)
+const albertaFixed = luxon.FixedOffsetZone.instance(-360);
 function formatEdmontonTime(utcString) {
-  const dt = luxon.DateTime.fromISO(utcString, { zone: 'utc' }).setZone(edmontonZone);
+  const u = luxon.DateTime.fromISO(utcString, { zone: 'utc' });
+  const dt = u.setZone(u.toMillis() >= Date.UTC(2026, 10, 1, 8) ? albertaFixed : edmontonZone);
   return dt.toFormat("yyyy-MM-dd HH:mm");
 }
 
